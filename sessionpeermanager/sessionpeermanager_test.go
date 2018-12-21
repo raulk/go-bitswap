@@ -2,8 +2,8 @@ package sessionpeermanager
 
 import (
 	"context"
-	"sync"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,6 +66,14 @@ func (*fakeConnManager) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo { return nil }
 func (*fakeConnManager) TrimOpenConns(ctx context.Context)       {}
 func (*fakeConnManager) Notifee() inet.Notifiee                  { return nil }
 
+func getPeers(sessionPeerManager *SessionPeerManager) []peer.ID {
+	optimizedPeers := sessionPeerManager.GetOptimizedPeers()
+	var peers []peer.ID
+	for _, optimizedPeer := range optimizedPeers {
+		peers = append(peers, optimizedPeer.Peer)
+	}
+	return peers
+}
 func TestFindingMorePeers(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
@@ -82,7 +90,7 @@ func TestFindingMorePeers(t *testing.T) {
 	defer findCancel()
 	sessionPeerManager.FindMorePeers(ctx, c)
 	<-findCtx.Done()
-	sessionPeers := sessionPeerManager.GetOptimizedPeers()
+	sessionPeers := getPeers(sessionPeerManager)
 	if len(sessionPeers) != len(peers) {
 		t.Fatal("incorrect number of peers found")
 	}
@@ -109,7 +117,7 @@ func TestRecordingReceivedBlocks(t *testing.T) {
 	sessionPeerManager := New(ctx, id, fpn)
 	sessionPeerManager.RecordPeerResponse(p, c)
 	time.Sleep(10 * time.Millisecond)
-	sessionPeers := sessionPeerManager.GetOptimizedPeers()
+	sessionPeers := getPeers(sessionPeerManager)
 	if len(sessionPeers) != 1 {
 		t.Fatal("did not add peer on receive")
 	}
@@ -156,8 +164,26 @@ func TestOrderingPeers(t *testing.T) {
 	}
 
 	// should prioritize peers which are fastest
-	if (sessionPeers[0] != peer1) || (sessionPeers[1] != peer2) || (sessionPeers[2] != peer3) {
+	if (sessionPeers[0].Peer != peer1) || (sessionPeers[1].Peer != peer2) || (sessionPeers[2].Peer != peer3) {
 		t.Fatal("Did not prioritize peers that received blocks")
+	}
+
+	// should give first peer rating of 1
+	if sessionPeers[0].OptimizationRating < 1.0 {
+		t.Fatal("Did not assign rating to best peer correctly")
+	}
+
+	// should give other optimized peers ratings between 0 & 1
+	if (sessionPeers[1].OptimizationRating >= 1.0) || (sessionPeers[1].OptimizationRating <= 0.0) ||
+		(sessionPeers[2].OptimizationRating >= 1.0) || (sessionPeers[2].OptimizationRating <= 0.0) {
+		t.Fatal("Did not assign rating to other optimized peers correctly")
+	}
+
+	// should other peers rating of zero
+	for i := 3; i < maxOptimizedPeers; i++ {
+		if sessionPeers[i].OptimizationRating != 0.0 {
+			t.Fatal("Did not assign rating to unoptimized peer correctly")
+		}
 	}
 
 	c2 := testutil.GenerateCids(1)
@@ -175,14 +201,15 @@ func TestOrderingPeers(t *testing.T) {
 	}
 
 	// should sort by average latency
-	if (nextSessionPeers[0] != peer1) || (nextSessionPeers[1] != peer3) || (nextSessionPeers[2] != peer2) {
+	if (nextSessionPeers[0].Peer != peer1) || (nextSessionPeers[1].Peer != peer3) ||
+		(nextSessionPeers[2].Peer != peer2) {
 		t.Fatal("Did not dedup peers which received multiple blocks")
 	}
 
 	// should randomize other peers
 	totalSame := 0
 	for i := 3; i < maxOptimizedPeers; i++ {
-		if sessionPeers[i] == nextSessionPeers[i] {
+		if sessionPeers[i].Peer == nextSessionPeers[i].Peer {
 			totalSame++
 		}
 	}
